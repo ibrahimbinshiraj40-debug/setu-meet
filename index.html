@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Setu Meet — ভাষার বাধা ছাড়া মিটিং</title>
+<meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="home">
+  <div class="topbar">
+    <div class="logo"><img src="icon.svg" alt="">Setu Meet</div>
+    <div style="display:flex;gap:8px;align-items:center">
+    <label class="lang-pick"><span id="globeI"></span><select id="uiLang"></select></label></div>
+  </div>
+  <div class="hero">
+    <div>
+      <h1 data-i18n="heroTitle"></h1>
+      <p class="sub" data-i18n="heroSub"></p>
+      <div class="actions">
+        <button class="btn pri" id="newBtn"><span id="plusI"></span><span data-i18n="newMeeting"></span></button>
+        <div class="code-box"><span id="kbI"></span><input id="code" data-i18n-ph="codePh" autocomplete="off"><button class="btn ghost" id="joinBtn" data-i18n="join"></button></div>
+      </div>
+      <div class="feats">
+        <div class="feat"><div class="dot" id="fi1"></div><div><b data-i18n="f1"></b><span data-i18n="f1d"></span></div></div>
+        <div class="feat"><div class="dot" id="fi2"></div><div><b data-i18n="f2"></b><span data-i18n="f2d"></span></div></div>
+        <div class="feat"><div class="dot" id="fi3"></div><div><b data-i18n="f3"></b><span data-i18n="f3d"></span></div></div>
+      </div>
+    </div>
+    <div class="art">
+      <div class="core" id="coreI"></div>
+      <div class="bub b1"><small>বাংলা</small>কেমন আছেন?</div>
+      <div class="bub b2"><small>English</small>How are you?</div>
+      <div class="bub b3"><small>हिन्दी</small>आप कैसे हैं?</div>
+      <div class="bub b4"><small>العربية</small>كيف حالك؟</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg hidden" id="modal">
+  <div class="modal">
+    <h3 data-i18n="meetingReady"></h3>
+    <p data-i18n="sendLink"></p>
+    <div class="link-row"><span id="linkI"></span><span id="linkTxt"></span></div>
+    <div class="row">
+      <button class="btn ghost" id="copyBtn"><span id="copyI"></span><span data-i18n="copy"></span></button>
+      <button class="btn ghost" id="shareBtn"><span id="shareI"></span><span data-i18n="share"></span></button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn ghost" id="closeBtn" data-i18n="close"></button>
+      <button class="btn pri" id="goBtn" data-i18n="joinNow"></button>
+    </div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="langs.js"></script>
+<script src="common.js"></script>
+<script>
+(function () {
+  const fill = { globeI: 'globe', plusI: 'plus', kbI: 'keyboard', fi1: 'mic', fi2: 'chat', fi3: 'link', coreI: 'globe', linkI: 'link', copyI: 'copy', shareI: 'shareI' };
+  for (const id in fill) $('#' + id).innerHTML = icon(fill[id]);
+
+  const sel = $('#uiLang');
+  sel.innerHTML = SETU_LANGS.map((l) => `<option value="${l.code}">${esc(l.name)}</option>`).join('');
+  sel.value = guessLang();
+  loadLang(sel.value);
+  sel.onchange = () => { localStorage.setItem('setu_lang', sel.value); loadLang(sel.value); };
+
+  const rnd = (n) => Array.from({ length: n }, () => 'abcdefghijkmnopqrstuvwxyz'[Math.floor(Math.random() * 25)]).join('');
+  let link = '', id = '';
+
+  $('#newBtn').onclick = () => {
+    id = rnd(3) + '-' + rnd(4) + '-' + rnd(3);
+    // হোস্ট চাবি — এই ফোন/কম্পিউটার থেকে ঢুকলে আপনিই হোস্ট
+    localStorage.setItem('setu_hk_' + id, Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join(''));
+    link = setuMeetLink(id);
+    $('#linkTxt').textContent = link;
+    $('#modal').classList.remove('hidden');
+  };
+  $('#closeBtn').onclick = () => $('#modal').classList.add('hidden');
+  $('#copyBtn').onclick = async () => { if (await copyText(link)) toast(t('copied')); };
+  $('#shareBtn').onclick = async () => {
+    if (window.SetuNative) return SetuNative.share(t('shareText'), link);
+    if (navigator.share) { try { await navigator.share({ title: 'Setu Meet', text: t('shareText'), url: link }); } catch (e) {} }
+    else if (await copyText(link)) toast(t('copied'));
+  };
+  $('#goBtn').onclick = () => { location.href = 'm.html?r=' + id; };
+
+  const go = () => {
+    let v = $('#code').value.trim();
+    if (!v) return $('#code').focus();
+    const m = v.match(/[?&]r=([a-z0-9-]+)/i) || v.match(/\/m\/([a-z0-9-]+)/i);
+    v = (m ? m[1] : v).toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (v) location.href = 'm.html?r=' + v;
+  };
+  $('#joinBtn').onclick = go;
+  $('#code').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+})();
+</script>
+</body>
+</html>
