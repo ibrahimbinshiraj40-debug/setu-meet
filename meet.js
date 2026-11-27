@@ -521,6 +521,24 @@
     aiDetach(id);
     layout(); renderAlone();
   }
+  // মানুষ বেশি হলে ভিডিও হালকা — যাতে আটকে না যায়
+  function tuneVideo() {
+    const n = peers.size;
+    const kbps = n <= 2 ? 700 : n <= 4 ? 400 : n <= 6 ? 250 : 150;
+    const scale = n <= 2 ? 1 : n <= 5 ? 1.5 : 2;
+    peers.forEach((p) => {
+      const snd = p.snd.video; if (!snd || !snd.getParameters) return;
+      try {
+        const prm = snd.getParameters();
+        if (!prm.encodings || !prm.encodings.length) prm.encodings = [{}];
+        prm.encodings[0].maxBitrate = kbps * 1000;
+        prm.encodings[0].scaleResolutionDownBy = screenTrack ? 1 : scale;
+        prm.encodings[0].maxFramerate = n <= 4 ? 24 : 15;
+        snd.setParameters(prm).catch(() => {});
+      } catch (e) {}
+    });
+  }
+  setInterval(tuneVideo, 4000);
   function replaceAll(kind, track) {
     for (const p of peers.values()) if (p.snd[kind]) p.snd[kind].replaceTrack(track).catch(() => {});
   }
@@ -708,8 +726,32 @@
     sendUpdate({ cam: prefCam });
     renderBar(); updateTile('me');
   }
+  // অ্যাপে (APK): Android-এর স্ক্রিন-ক্যাপচার থেকে ছবি এনে ভিডিও বানানো
+  let scrCanvas = null, scrCtx = null, scrImg = null, nativeScreen = false;
+  window.__setuFrame = (b64, w, h) => {
+    if (!nativeScreen) return;
+    if (!scrCanvas) {
+      scrCanvas = document.createElement('canvas'); scrCanvas.width = w; scrCanvas.height = h;
+      scrCtx = scrCanvas.getContext('2d'); scrImg = new Image();
+      scrImg.onload = () => { if (scrCanvas.width !== scrImg.width) { scrCanvas.width = scrImg.width; scrCanvas.height = scrImg.height; } scrCtx.drawImage(scrImg, 0, 0); };
+      const tr = scrCanvas.captureStream(10).getVideoTracks()[0];
+      screenTrack = tr;
+      replaceAll('video', screenTrack);
+      tiles.get('me') && (tiles.get('me').video.srcObject = new MediaStream([screenTrack]));
+      sendUpdate({ screen: true });
+      renderBar(); updateTile('me');
+      toast(t('screenOn'));
+    }
+    scrImg.src = 'data:image/jpeg;base64,' + b64;
+  };
+  window.__setuScreenStop = () => { if (nativeScreen) { nativeScreen = false; stopScreen(); } };
   async function toggleScreen() {
-    if (screenTrack) return stopScreen();
+    if (screenTrack) { if (nativeScreen) { nativeScreen = false; try { SetuNative.stopScreen(); } catch (e) {} } return stopScreen(); }
+    if (window.SetuNative && SetuNative.startScreen) {
+      nativeScreen = true; scrCanvas = null;
+      try { SetuNative.startScreen(); } catch (e) { nativeScreen = false; toast(t('noScreen')); }
+      return;
+    }
     if (!navigator.mediaDevices.getDisplayMedia) return toast(t('noScreen'));
     try {
       const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
@@ -723,7 +765,8 @@
   }
   function stopScreen(silent) {
     if (!screenTrack) return;
-    screenTrack.onended = null; screenTrack.stop(); screenTrack = null;
+    screenTrack.onended = null; screenTrack.stop(); screenTrack = null; scrCanvas = null;
+    if (nativeScreen) { nativeScreen = false; try { SetuNative.stopScreen(); } catch (e) {} }
     if (!silent) {
       replaceAll('video', camTrack || null);
       if (tiles.get('me')) tiles.get('me').video.srcObject = new MediaStream(camTrack ? [camTrack] : []);

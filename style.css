@@ -385,3 +385,4 @@ body{background:radial-gradient(1200px 600px at 10% -10%,#1d3b6e55,transparent 6
 .bar .mid .cb.end{width:68px}
 @media (max-width:860px){.bar .mid .cb{width:46px;height:46px}.bar .mid .cb.end{width:60px}}
 .modal .linkbtn{display:inline-flex}
+.alone{top:62px!important}

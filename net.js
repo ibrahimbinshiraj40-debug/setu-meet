@@ -82,7 +82,7 @@
       const now = Date.now();
       for (const id of [...this.r.members.keys(), ...this.r.waiting.keys()]) {
         if (id === this.sock.id) continue;
-        if (now - (this.seenAt.get(id) || 0) > 20000) this.leave(id);
+        if (now - (this.seenAt.get(id) || 0) > 45000) this.leave(id);
       }
     }, 5000);
   }
@@ -104,7 +104,12 @@
   Hub.prototype.onBus = function (m) {
     if (!m || !m.from || m.from === this.sock.id) return;
     this.seenAt.set(m.from, Date.now());
-    if (m.t === 'ping') { this.bus.pub('c/' + m.from, { t: 'pong' }); return; }
+    if (m.t === 'ping') {
+      this.bus.pub('c/' + m.from, { t: 'pong' });
+      // ভুল করে বাদ পড়ে গেলে (নেট দুর্বল) — নিজে থেকে আবার যুক্ত করে নেয়
+      if (m.joined && !this.r.members.has(m.from) && !this.r.waiting.has(m.from)) this.send(m.from, 'rejoin', 1);
+      return;
+    }
     if (m.t === 'bye') { this.leave(m.from); return; }
     if (m.t === 'e') {
       const ack = m.a ? (res) => this.bus.pub('c/' + m.from, { t: 'a', a: m.a, d: res }) : null;
@@ -307,8 +312,8 @@
   };
   GuestSock.prototype._tick = function () {
     if (this.closed || !this.bus.ready) return;
-    this.bus.pub('h', { t: 'ping', from: this.id });
-    if (this.connected && Date.now() - this.lastPong > 16000) this._lost();
+    this.bus.pub('h', { t: 'ping', from: this.id, joined: !!this.joined });
+    if (this.connected && Date.now() - this.lastPong > 25000) this._lost();
   };
   GuestSock.prototype._lost = function () {
     if (!this.connected) return;
@@ -326,11 +331,19 @@
       this.lastPong = Date.now();
       if (!this.connected) { this.connected = true; clearTimeout(this.pt); this._fire('connect'); }
     } else if (m.t === 'a') { const f = this.acks[m.a]; delete this.acks[m.a]; if (f) f(m.d); }
-    else if (m.t === 'e') { this.lastPong = Date.now(); this._fire(m.ev, m.d); }
+    else if (m.t === 'e') {
+      this.lastPong = Date.now();
+      if (m.ev === 'admitted') this.joined = true;
+      if (m.ev === 'rejoin') { this._fire('disconnect'); this._fire('connect'); return; }
+      this._fire(m.ev, m.d);
+    }
   };
   GuestSock.prototype.emit = function (ev, d, ack) {
     const m = { t: 'e', from: this.id, ev, d };
-    if (ack) { m.a = 'a' + (++this.seq); this.acks[m.a] = ack; }
+    if (ack) {
+      m.a = 'a' + (++this.seq);
+      this.acks[m.a] = ev === 'join' ? (res) => { if (res && res.me) this.joined = true; ack(res); } : ack;
+    }
     this.bus.pub('h', m);
   };
   GuestSock.prototype.disconnect = function () {
