@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="bn"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Setu Meet — Google সাইন ইন</title><link rel="stylesheet" href="style.css">
+<script src="config.js"></script></head>
+<body>
+<div class="join"><div class="logo"><img src="icon.svg" alt="">Setu Meet</div>
+<div class="panel" style="max-width:420px;text-align:center">
+  <h2>Google দিয়ে সাইন ইন</h2>
+  <p class="why" id="msg">আপনার Gmail-এর নাম আর প্রোফাইল ছবি Setu Meet অ্যাপে যাবে।</p>
+  <div id="g" style="display:flex;justify-content:center;margin:18px 0"></div>
+</div></div>
+<script>
+// অ্যাপ (APK) এখানে পাঠায় — সাইন ইন শেষে নাম আর ছবি অ্যাপে ফেরত যায়
+if (!SETU_GOOGLE_CLIENT_ID) {
+  document.getElementById('msg').textContent = 'Google সাইন ইন এখনো চালু করা হয়নি (config.js-এ Client ID নেই)।';
+} else {
+  const s = document.createElement('script');
+  s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+  s.onload = () => {
+    google.accounts.id.initialize({ client_id: SETU_GOOGLE_CLIENT_ID, auto_select: true, callback: (r) => {
+      try {
+        const b = r.credential.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const j = JSON.parse(decodeURIComponent(escape(atob(b))));
+        const q = 'name=' + encodeURIComponent(j.name || '') + '&pic=' + encodeURIComponent(j.picture || '');
+        document.getElementById('msg').textContent = 'হয়ে গেছে! অ্যাপে ফিরে যাচ্ছে…';
+        location.href = 'setumeet://signin#' + q;
+      } catch (e) { document.getElementById('msg').textContent = 'সাইন ইন হয়নি, আবার চেষ্টা করুন।'; }
+    } });
+    google.accounts.id.renderButton(document.getElementById('g'), { theme: 'filled_black', size: 'large', shape: 'pill', text: 'continue_with' });
+    google.accounts.id.prompt();
+  };
+  document.head.appendChild(s);
+}
+</script></body></html>

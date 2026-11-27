@@ -79,7 +79,8 @@
   }
   // Google দিয়ে সাইন ইন (Client ID দেওয়া থাকলে, ব্রাউজারে)
   function setupGoogle() {
-    if (typeof SETU_GOOGLE_CLIENT_ID === 'undefined' || !SETU_GOOGLE_CLIENT_ID || window.SetuNative) return;
+    if (typeof SETU_GOOGLE_CLIENT_ID === 'undefined' || !SETU_GOOGLE_CLIENT_ID) return;
+    if (window.SetuNative) { if (!myPhoto) $('#gAppBtn').classList.remove('hidden'); return; }
     const sc = document.createElement('script');
     sc.src = 'https://accounts.google.com/gsi/client'; sc.async = true;
     sc.onload = () => {
@@ -159,6 +160,13 @@
   };
   $('#photoBtn').onclick = pickPhoto;
   $('#pvAv').onclick = pickPhoto;
+  // অ্যাপে: বাইরের ব্রাউজারে Google সাইন ইন → নাম আর ছবি ফেরত আসে
+  $('#gAppBtn').onclick = () => { try { SetuNative.openExternal(SETU_PUBLIC_BASE + 'signin.html'); } catch (e) {} };
+  window.__setuSignedIn = (name, pic) => {
+    if (pic) { myPhoto = pic; try { localStorage.setItem('setu_photo', pic); } catch (e) {} }
+    if (name && !$('#name').value.trim()) $('#name').value = name;
+    updateSetup();
+  };
   $('#changeLang').onclick = () => { $('#stepSetup').classList.add('hidden'); $('#stepLang').classList.remove('hidden'); };
   async function tryAutoPreview() {
     try {
@@ -245,6 +253,7 @@
     socket.on('denied', () => showEnd(t('denied'), true));
     socket.on('kicked', (d) => { kickedOut = true; showEnd(d && d.ban ? t('banned') : t('kicked'), !(d && d.ban)); });
     socket.on('force', onForce);
+    socket.on('stt-result', onSttResult);
     socket.on('settings', onSettings);
     socket.on('lobby', (l) => { lobby = l || []; renderPeople(); renderKnocks(); });
     socket.on('knock', (k) => { if (isHost()) { beep(740); setTimeout(() => beep(990), 180); } });
@@ -252,7 +261,7 @@
     renderRoom();
   }
 
-  let kickedOut = false;
+  let kickedOut = false, aiHintShown = false;
   function doJoin() {
     if (kickedOut) return;
     socket.emit('join', { room: roomId, name: myName, lang: myLang, gender: myGender, mode: 'chat', clientId, hostKey, photo: myPhoto }, onJoined);
@@ -270,6 +279,11 @@
       $('#waitScr').classList.add('hidden');
       $('#room').classList.remove('hidden');
       me = res.me;
+      if (socket.setAI) {
+        socket.sttHandler = (b64, lang) => SetuAI.stt(b64, lang);
+        socket.setAI(SetuAI.ready());
+        if (!SetuAI.ready() && !aiHintShown) { aiHintShown = true; setTimeout(() => toast(t('aiNeedKey'), 6000), 2500); }
+      }
       if (window.SetuNative && SetuNative.meetingOn) try { SetuNative.meetingOn(); } catch (e) {}
       roomSet = res.settings || roomSet;
       if (roomSet.lockMic && !isHost()) prefMic = false;
@@ -301,8 +315,11 @@
     renderBar(); updateTile('me');
   }
   function onSettings(st) {
-    const was = roomSet.lockMic;
+    const was = roomSet.lockMic, wasAI = roomSet.aiStt;
     roomSet = st;
+    if (st.aiStt && !wasAI) stopRec();                       // হোস্টের AI শুনছে — নিজের ফোনের মাইক-শোনা বন্ধ
+    if (!st.aiStt && wasAI && inCall && micTrack && micTrack.enabled) startRec();
+    aiRefresh();
     if (!isHost()) {
       if (st.lockMic && !was) { onForce({ mic: false, by: t('host') }); toast(t('micsLockedOn')); }
       if (!st.lockMic && was) toast(t('micsUnlocked'));
@@ -383,6 +400,7 @@
     if (me) Object.assign(me, { mode: 'call', mic: !!(micTrack && prefMic), cam: !!(camTrack && prefCam) });
     for (const p of parts.values()) if (p.mode === 'call') makeOffer(p.id);
     watchLevel('me', localStream);
+    aiRefresh();
     startRec();
     if (!SR) toast(t('noSpeech'), 5000);
     keepAwake();
@@ -392,6 +410,7 @@
 
   function leaveCall() {
     for (const id of [...peers.keys()]) closePeer(id);
+    [...aiL.keys()].forEach(aiDetach);
     stopScreen(true);
     stopRec();
     if (localStream) localStream.getTracks().forEach((tr) => tr.stop());
@@ -419,7 +438,7 @@
       peer.stream.addTrack(e.track);
       const v = tiles.get(id) && tiles.get(id).video;
       if (v) { v.srcObject = peer.stream; v.play().catch(needTap); }
-      if (e.track.kind === 'audio') watchLevel(id, peer.stream);
+      if (e.track.kind === 'audio') { watchLevel(id, peer.stream); aiRefresh(); }
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed' && peer.offerer) {
@@ -499,6 +518,7 @@
     const tl = tiles.get(id);
     if (tl) { tl.el.remove(); tiles.delete(id); }
     levels.delete(id);
+    aiDetach(id);
     layout(); renderAlone();
   }
   function replaceAll(kind, track) {
@@ -561,11 +581,81 @@
       if (w > bestSize) { bestSize = w; best = c; }
     }
     g.style.setProperty('--cols', best);
+    // দুজন হলে: অন্যজন পুরো স্ক্রিনে, নিজে ছোট ভাসমান ঘরে (Google Meet-এর মতো)
+    const duo = inCall && tiles.size === 2 && tiles.has('me');
+    g.classList.toggle('duo', duo);
+    if (duo) g.style.setProperty('--cols', 1);
   }
   window.addEventListener('resize', layout);
+  (function dragSelf() {
+    let sx, sy, ox, oy, el = null;
+    document.addEventListener('pointerdown', (e) => {
+      const t0 = e.target.closest('.grid.duo .tile.me'); if (!t0) return;
+      el = t0; sx = e.clientX; sy = e.clientY;
+      const r = el.getBoundingClientRect(), pr = el.offsetParent.getBoundingClientRect();
+      ox = r.left - pr.left; oy = r.top - pr.top; el.setPointerCapture(e.pointerId);
+    });
+    document.addEventListener('pointermove', (e) => {
+      if (!el) return;
+      const pr = el.offsetParent.getBoundingClientRect();
+      const x = Math.max(8, Math.min(pr.width - el.offsetWidth - 8, ox + e.clientX - sx));
+      const y = Math.max(8, Math.min(pr.height - el.offsetHeight - 8, oy + e.clientY - sy));
+      el.style.left = x + 'px'; el.style.top = y + 'px'; el.style.right = 'auto';
+    });
+    document.addEventListener('pointerup', () => { el = null; });
+  })();
   function renderAlone() {
     $('#alone').classList.toggle('hidden', !(inCall && peers.size === 0));
   }
+
+  // ================= হোস্টের AI কান (Gemini) =================
+  const aiL = new Map(); // id -> Listener
+  let aiSeq = 0, dictating = false;
+  function aiDetach(id) { const l = aiL.get(id); if (l) { l.stop(); aiL.delete(id); } }
+  function aiRefresh() {
+    const on = isHost() && roomSet.aiStt && inCall && SetuAI.ready();
+    if (!on) { [...aiL.keys()].forEach(aiDetach); return; }
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+    const want = new Map();
+    if (localStream && micTrack) want.set('me', new MediaStream([micTrack]));
+    peers.forEach((p, id) => { if (p.stream.getAudioTracks().length) want.set(id, p.stream); });
+    [...aiL.keys()].forEach((id) => { if (!want.has(id)) aiDetach(id); });
+    want.forEach((st, id) => {
+      if (aiL.has(id)) return;
+      try { aiL.set(id, new SetuAI.Listener(actx, st, (b64) => aiHeard(id, b64))); } catch (e) {}
+    });
+  }
+  async function aiHeard(id, b64) {
+    const who = id === 'me' ? me : parts.get(id);
+    if (!who || (id !== 'me' && !who.mic) || (id === 'me' && !(micTrack && micTrack.enabled))) return;
+    const lang = id === 'me' ? myLang : who.lang;
+    let text = '';
+    try { text = await SetuAI.stt(b64, lang); }
+    catch (e) {
+      const m = String(e.message || e);
+      if (m === 'limit' && SetuAI.limitHit()) toast(t('aiLimit'), 5000);
+      if (m === 'badkey' && SetuAI.limitHit()) toast(t('aiBadKey'), 6000);
+      return;
+    }
+    if (!text) return;
+    if (id === 'me') {
+      if (recentHeard.some((x) => SetuAI.similar(x, text))) return; // স্পিকারের প্রতিধ্বনি
+      const seg = 'm' + (++aiSeq);
+      showCap('me', myName + ' (' + t('you') + ')', text, null, 'me|' + seg, true);
+      socket.emit('speech', { text, final: true, seg });
+    } else {
+      if (socket.recentTo(id).some((x) => SetuAI.similar(x, text))) return; // ওর ফোনের স্পিকার থেকে ফেরত আসা শব্দ
+      socket.speechAs(id, text, ++aiSeq);
+    }
+  }
+  const recentHeard = [];
+  // নিজের মাইক: অনুবাদের কণ্ঠ বাজার সময় বা অন্য কেউ বলার সময় শোনা বন্ধ (প্রতিধ্বনি ঠেকাতে)
+  setInterval(() => {
+    const me1 = aiL.get('me'); if (!me1) return;
+    let other = false; aiL.forEach((l, id) => { if (id !== 'me' && l.active) other = true; });
+    me1.paused = speaking || dictating || (other && !set.headphones);
+  }, 120);
 
   // ---------- কথা বলার ইন্ডিকেটর ----------
   let actx = null;
@@ -692,6 +782,7 @@
   // ================= লাইভ কথা → লেখা → অনুবাদ =================
   let rec = null, recOn = false, recPaused = false, seg = 0, lastInterim = 0, srWarned = false;
   function startRec() {
+    if (roomSet.aiStt) return; // হোস্টের AI এই কাজ করছে
     if (!SR || !inCall || !micTrack || !micTrack.enabled) return;
     recOn = true;
     if (rec) return;
@@ -744,6 +835,7 @@
   }
   async function onSpeech(d0) {
     const d = d0.final ? await ensureTr(d0) : d0;
+    if (d.final) { recentHeard.push(d.text, d.original); while (recentHeard.length > 16) recentHeard.shift(); }
     if (inCall) {
       if (set.captions) showCap(d.from, d.name, d.text, d.same ? null : d.original, d.from + '|' + d.seg, d.final);
       if (d.final && !d.same && !set.original) speak(d);
@@ -901,18 +993,83 @@
   $('#sendBtn').onclick = sendChat;
 
   // বলে লেখা (চ্যাটে ভয়েস টাইপিং)
-  let dict = null;
-  $('#dictate').onclick = () => {
-    if (!SR) return toast(t('noSpeech'));
+  // AI চালু থাকলে: নিজের মাইকের শব্দ রেকর্ড → AI লেখে (কলের সাথে মাইক নিয়ে টানাটানি নেই)
+  let dict = null, dictL = null, dictStream = null, dictOwn = false, sttWait = {}, sttSeq = 0;
+  const dBtn = $('#dictate');
+  function dictUI(state) {
+    dBtn.classList.toggle('listening', state === 'listen');
+    dBtn.classList.toggle('busy', state === 'busy');
+    dBtn.innerHTML = state === 'busy' ? '<span class="dspin"></span>' : icon('mic');
+  }
+  function dictStop() {
+    if (dictL) { dictL.stop(); dictL = null; }
+    if (dictStream && dictOwn) dictStream.getTracks().forEach((x) => x.stop());
+    dictStream = null; dictating = false;
+  }
+  async function dictAI() {
+    if (dictL) { dictL.flush(); return; }
+    try {
+      if (micTrack && localStream) { const c = micTrack.clone(); c.enabled = true; dictStream = new MediaStream([c]); dictOwn = true; }
+      else { dictStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); dictOwn = true; }
+    } catch (e) { return toast(t('noMedia')); }
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+    dictating = true; dictUI('listen');
+    toast(t('dictHint'), 3500);
+    const timeout = setTimeout(() => dictL && dictL.flush(), 30000);
+    let got = false;
+    dictL = new SetuAI.Listener(actx, dictStream, async (b64) => {
+      if (got) return; got = true; clearTimeout(timeout);
+      dictStop(); dictUI('busy');
+      try {
+        const text = await sttAny(b64);
+        if (text) { const ta = $('#msgIn'); ta.value = (ta.value ? ta.value + ' ' : '') + text; autoGrow(); ta.focus(); }
+        else toast(t('noVoiceHeard'));
+      } catch (e) {
+        const m = String(e.message || e);
+        toast(m === 'limit' ? t('aiLimit') : m === 'badkey' ? t('aiBadKey') : t('dictFail'), 4000);
+      }
+      dictUI('idle');
+    }, { endMs: 1300, maxMs: 30000, minLevel: 0.01 });
+    // ৮ সেকেন্ডে কিছু না বললে বন্ধ
+    setTimeout(() => { if (dictL && !dictL.active && !got) { dictStop(); dictUI('idle'); toast(t('noVoiceHeard')); } }, 8000);
+  }
+  // হোস্ট নিজে AI দিয়ে, গেস্ট হোস্টের কাছে পাঠিয়ে
+  function sttAny(b64) {
+    if (isHost() || !socket.id || socket.setAI) return SetuAI.stt(b64, myLang);
+    return new Promise((res, rej) => {
+      const sid = 'd' + (++sttSeq) + Date.now().toString(36);
+      sttWait[sid] = { res, rej };
+      const N = 40000, n = Math.ceil(b64.length / N);
+      for (let i = 0; i < n; i++) socket.emit('stt', { sid, i, n, data: b64.slice(i * N, (i + 1) * N) });
+      setTimeout(() => { if (sttWait[sid]) { delete sttWait[sid]; rej(new Error('timeout')); } }, 25000);
+    });
+  }
+  function onSttResult(r) {
+    const w = sttWait[r && r.sid]; if (!w) return; delete sttWait[r.sid];
+    if (r.error) w.rej(new Error(r.error)); else w.res(r.text || '');
+  }
+  function dictSR() {
     if (dict) { dict.stop(); return; }
     pauseRec(true);
     dict = new SR();
     dict.lang = langInfo(myLang).sr; dict.interimResults = true; dict.continuous = false;
     const base = $('#msgIn').value ? $('#msgIn').value + ' ' : '';
-    dict.onresult = (e) => { let s = ''; for (const r of e.results) s += r[0].transcript; $('#msgIn').value = base + s; autoGrow(); };
-    dict.onend = () => { dict = null; $('#dictate').classList.remove('listening'); pauseRec(false); };
-    $('#dictate').classList.add('listening');
-    try { dict.start(); } catch (e) { dict = null; }
+    let heard = false;
+    dict.onresult = (e) => { let s2 = ''; for (const r of e.results) s2 += r[0].transcript; heard = true; $('#msgIn').value = base + s2; autoGrow(); };
+    dict.onerror = (e) => { if (e.error !== 'no-speech' && e.error !== 'aborted') toast(t('dictFail')); };
+    dict.onend = () => { dict = null; dictUI('idle'); pauseRec(false); if (!heard) toast(t('noVoiceHeard')); };
+    dictUI('listen');
+    try { dict.start(); } catch (e) { dict = null; dictUI('idle'); }
+  }
+  dBtn.onclick = () => {
+    if (dBtn.classList.contains('busy')) return;
+    const aiReady = (isHost() && SetuAI.ready()) || (!isHost() && roomSet.aiStt);
+    if (aiReady) return dictAI();
+    // কলে থাকলে ফোনের মাইক-শোনা কাজ করে না — তাই AI না থাকলে জানিয়ে দেয়
+    if (inCall && /Android|iPhone|iPad/i.test(navigator.userAgent)) return toast(t(isHost() ? 'aiNeedKey' : 'dictInCall'), 6000);
+    if (!SR) return toast(t('noSpeech'));
+    dictSR();
   };
 
   // ================= রিঅ্যাকশন =================
@@ -1007,6 +1164,7 @@
   function renderCount() {
     const n = parts.size + 1;
     $('#chCount').textContent = n + ' ' + t('participants') + ' · ' + roomId;
+    $('#callHead').innerHTML = `<b>Setu Meet</b><span>${n} ${esc(t('participants'))}</span>` + (roomSet.aiStt ? `<i>${icon('ai')}AI</i>` : '');
     const lb = isHost() && lobby.length;
     const cnt = lb ? `<span class="cnt" style="background:var(--yel);color:#000">${lobby.length}</span>` : n > 1 ? `<span class="cnt">${n}</span>` : '';
     $('#bPeople').innerHTML = icon('people') + cnt;
@@ -1050,6 +1208,7 @@
       items.push(['back', 'chat', t('backToChat'), leaveCall]);
     }
     if (isHost()) items.unshift(['shield', 'shield', t('hostControls'), () => openSide('people')]);
+    if (isHost()) items.push(['ai', 'ai', t('aiTitle') + (SetuAI.hasKey() ? ' ✓' : ''), openAIModal]);
     items.push(['globe', 'globe', t('changeLang') + ' · ' + langInfo(myLang).name, openLangModal]);
     items.push(['link', 'copy', t('copy'), copyLink]);
     items.push(['shareI', 'shareI', t('share'), shareLink]);
@@ -1076,6 +1235,22 @@
     if (navigator.share) { try { await navigator.share({ title: 'Setu Meet', text: t('shareText'), url: LINK }); } catch (e) {} }
     else copyLink();
   }
+
+  // AI কথা-অনুবাদ সেটিং (Gemini key)
+  function openAIModal() {
+    $('#aiModal').classList.remove('hidden');
+    $('#aiKey').value = SetuAI.getKey();
+    $('#aiState').textContent = SetuAI.hasKey() ? t('aiOn') : SetuAI.nativeOK() ? t('aiNoKeyOk') : '';
+  }
+  $('#aiClose').onclick = () => $('#aiModal').classList.add('hidden');
+  $('#aiSave').onclick = () => {
+    const k = $('#aiKey').value.trim();
+    SetuAI.setKey(k);
+    $('#aiModal').classList.add('hidden');
+    if (socket && socket.setAI) socket.setAI(SetuAI.ready());
+    aiRefresh();
+    toast(k ? t('aiSaved') : t('aiRemoved'));
+  };
 
   // ভাষা বদলানো (মিটিংয়ের মধ্যে)
   function openLangModal() {

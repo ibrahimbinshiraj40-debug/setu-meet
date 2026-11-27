@@ -74,7 +74,9 @@
   function Hub(sock, bus) {
     this.sock = sock; this.bus = bus;
     this.seenAt = new Map();
-    this.r = { members: new Map(), waiting: new Map(), lobby: false, lockMic: false, banned: new Set(), admitted: new Set() };
+    this.r = { members: new Map(), waiting: new Map(), lobby: false, lockMic: false, aiStt: false, banned: new Set(), admitted: new Set() };
+    this.sent = new Map(); // কাকে শেষ কী পাঠানো হয়েছে (প্রতিধ্বনি ধরার জন্য)
+    this.sttParts = new Map();
     // ২০ সেকেন্ড সাড়া না দিলে ধরে নেওয়া হয় চলে গেছে
     this.sweep = setInterval(() => {
       const now = Date.now();
@@ -89,7 +91,12 @@
     this.bus.pub('c/' + id, { t: 'e', ev, d });
   };
   Hub.prototype.all = function (ev, d, except) { for (const id of this.r.members.keys()) if (id !== except) this.send(id, ev, d); };
-  Hub.prototype.settings = function () { return { lobby: this.r.lobby, lockMic: this.r.lockMic }; };
+  Hub.prototype.settings = function () { return { lobby: this.r.lobby, lockMic: this.r.lockMic, aiStt: this.r.aiStt }; };
+  Hub.prototype.remember = function (id, text) {
+    const now = Date.now(); const l = (this.sent.get(id) || []).filter((x) => now - x.t < 20000);
+    l.push({ text, t: now }); this.sent.set(id, l.slice(-12));
+  };
+  Hub.prototype.recentTo = function (id) { const now = Date.now(); return (this.sent.get(id) || []).filter((x) => now - x.t < 20000).map((x) => x.text); };
   Hub.prototype.hosts = function () { return [...this.r.members.values()].filter((p) => p.host); };
   Hub.prototype.waitList = function () { return [...this.r.waiting.values()].map((w) => ({ id: w.p.id, name: w.p.name, lang: w.p.lang, photo: w.p.photo })); };
   Hub.prototype.sendLobby = function () { const l = this.waitList(); this.hosts().forEach((h) => this.send(h.id, 'lobby', l)); };
@@ -113,6 +120,11 @@
     const res = { me: p, participants: this.others(p.id), settings: this.settings() };
     if (ack) ack(res); else this.send(p.id, 'admitted', res);
     if (p.host) this.send(p.id, 'lobby', this.waitList());
+  };
+  Hub.prototype.updateAI = function () {
+    const h = this.r.members.get(this.sock.id);
+    const on = !!(this.sock.aiOn && h && h.mode === 'call');
+    if (on !== this.r.aiStt) { this.r.aiStt = on; this.all('settings', this.settings()); }
   };
   Hub.prototype.leave = function (id) {
     const r = this.r;
@@ -160,6 +172,7 @@
         for (const k of ['mic', 'cam', 'hand', 'screen']) if (k in d) me[k] = !!d[k];
         if (r.lockMic && !me.host) me.mic = false;
         if (d.mode === 'call' || d.mode === 'chat') me.mode = d.mode;
+        if (me.host) this.updateAI();
         if (d.lang) me.lang = validLang(d.lang);
         if (d.gender === 'm' || d.gender === 'f') me.gender = d.gender;
         if (d.name) me.name = cleanName(d.name);
@@ -186,7 +199,23 @@
         if (!list.length) return;
         const map = await trMap(text, me.lang, list.map((x) => x.lang));
         const base = { from, name: me.name, srcLang: me.lang, gender: me.gender, original: text, final: !!d.final, seg: String(d.seg || '') };
-        list.forEach((x) => this.send(x.id, 'speech', { ...base, text: map[x.lang], same: baseOf(x.lang) === baseOf(me.lang) }));
+        list.forEach((x) => { if (d.final) this.remember(x.id, map[x.lang]); this.send(x.id, 'speech', { ...base, text: map[x.lang], same: baseOf(x.lang) === baseOf(me.lang) }); });
+        return;
+      }
+      case 'stt': {
+        // গেস্টের ভয়েস টাইপিং — হোস্ট AI দিয়ে লিখে দেয়
+        if (!me || !d || !d.sid) return;
+        const k = from + ':' + d.sid;
+        const st = this.sttParts.get(k) || { parts: [], n: d.n, t: Date.now() };
+        st.parts[d.i] = String(d.data || '');
+        this.sttParts.set(k, st);
+        if (st.parts.filter((x) => x !== undefined).length < st.n) return;
+        this.sttParts.delete(k);
+        const b64 = st.parts.join('');
+        const fn = this.sock.sttHandler;
+        if (!fn) return this.send(from, 'stt-result', { sid: d.sid, error: 'nokey' });
+        fn(b64, me.lang).then((text) => this.send(from, 'stt-result', { sid: d.sid, text }))
+          .catch((e) => this.send(from, 'stt-result', { sid: d.sid, error: String(e && e.message || e) }));
         return;
       }
       case 'react':
@@ -247,6 +276,10 @@
   HostSock.prototype.emit = function (ev, d, ack) {
     this.hub.handle(this.id, ev, d, ack ? (res) => setTimeout(() => ack(res), 0) : null);
   };
+  HostSock.prototype.setAI = function (on) { this.aiOn = !!on; this.hub.updateAI(); };
+  // হোস্টের AI যা শুনল — যেন ওই মানুষটা নিজে বলেছে
+  HostSock.prototype.speechAs = function (pid, text, seg) { this.hub.handle(pid, 'speech', { text, final: true, seg: 'ai' + seg }, null); };
+  HostSock.prototype.recentTo = function (pid) { return this.hub.recentTo(pid); };
   HostSock.prototype.disconnect = function () {
     clearInterval(this.hub.sweep);
     this.bus.pub('a', { t: 'hostgone' }).finally(() => setTimeout(() => this.bus.end(), 300));

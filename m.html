@@ -46,6 +46,7 @@
           <button class="linkbtn" id="changeLang"></button>
         </div>
         <div id="gBtn" class="hidden" style="margin-top:12px"></div>
+        <button class="btn ghost hidden" id="gAppBtn" style="margin-top:12px;width:100%"><b style="color:#4285f4">G</b><span data-i18n="gSignIn"></span></button>
       </div>
       <div>
         <div class="label" data-i18n="yourName"></div>
@@ -79,6 +80,7 @@
   <div class="room-main">
     <div class="stage" id="stage">
       <div class="grid" id="grid"></div>
+      <div class="callhead" id="callHead"></div>
       <div class="alone hidden" id="alone"><span data-i18n="alone"></span><button class="btn ghost" id="aloneCopy" style="padding:7px 12px"><span data-i18n="copy"></span></button></div>
       <div class="captions" id="caps"></div>
       <div class="react-layer" id="reactLayer"></div>
@@ -128,6 +130,21 @@
   </div>
 </div>
 
+<!-- AI কথা-অনুবাদ সেটিং -->
+<div class="modal-bg hidden" id="aiModal">
+  <div class="modal">
+    <h3 data-i18n="aiTitle"></h3>
+    <p data-i18n="aiDesc"></p>
+    <a class="linkbtn" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" data-i18n="aiGetKey" style="margin:0 0 12px"></a>
+    <input class="field" id="aiKey" data-i18n-ph="aiKeyPh" autocomplete="off" spellcheck="false">
+    <div id="aiState" style="color:var(--green);font-size:13px;margin:8px 2px 0"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn ghost" id="aiClose" data-i18n="close"></button>
+      <button class="btn pri" id="aiSave" data-i18n="save"></button>
+    </div>
+  </div>
+</div>
+
 <!-- অনুমতির অপেক্ষা -->
 <div class="ended hidden" id="waitScr">
   <div>
@@ -157,6 +174,7 @@
 <script src="net.js"></script>
 <script src="langs.js"></script>
 <script src="common.js"></script>
+<script src="ai.js"></script>
 <script src="meet.js"></script>
 </body>
 </html>
