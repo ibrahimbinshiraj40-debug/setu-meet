@@ -52,6 +52,54 @@
   putIcons();
   $('#reactPop').innerHTML = Object.entries(REACTS).map(([k, e]) => `<button data-r="${k}">${e}</button>`).join('');
 
+  // ---------- প্রোফাইল ছবি ----------
+  let myPhoto = localStorage.getItem('setu_photo') || '';
+  const okPhoto = (u) => /^data:image\//.test(u || '') || /^https:\/\/lh\d\.googleusercontent\.com\//.test(u || '');
+  function avInner(name, photo) {
+    if (okPhoto(photo)) return `<img src="${esc(photo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` + esc((name || '?')[0].toUpperCase());
+    return esc((name || '?')[0].toUpperCase());
+  }
+  function pickPhoto() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = () => {
+      const f = inp.files && inp.files[0]; if (!f) return;
+      const img = new Image();
+      img.onload = () => {
+        const S = 96, cv = document.createElement('canvas'); cv.width = cv.height = S;
+        const m = Math.min(img.width, img.height);
+        cv.getContext('2d').drawImage(img, (img.width - m) / 2, (img.height - m) / 2, m, m, 0, 0, S, S);
+        myPhoto = cv.toDataURL('image/jpeg', 0.72);
+        try { localStorage.setItem('setu_photo', myPhoto); } catch (e) {}
+        URL.revokeObjectURL(img.src); updateSetup();
+      };
+      img.src = URL.createObjectURL(f);
+    };
+    inp.click();
+  }
+  // Google দিয়ে সাইন ইন (Client ID দেওয়া থাকলে, ব্রাউজারে)
+  function setupGoogle() {
+    if (typeof SETU_GOOGLE_CLIENT_ID === 'undefined' || !SETU_GOOGLE_CLIENT_ID || window.SetuNative) return;
+    const sc = document.createElement('script');
+    sc.src = 'https://accounts.google.com/gsi/client'; sc.async = true;
+    sc.onload = () => {
+      try {
+        google.accounts.id.initialize({ client_id: SETU_GOOGLE_CLIENT_ID, auto_select: true, callback: (r) => {
+          try {
+            const j = JSON.parse(decodeURIComponent(escape(atob(r.credential.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))));
+            if (j.picture) { myPhoto = j.picture; localStorage.setItem('setu_photo', myPhoto); }
+            if (j.name && !$('#name').value.trim()) $('#name').value = j.name;
+            updateSetup();
+          } catch (e) {}
+        } });
+        $('#gBtn').classList.remove('hidden');
+        google.accounts.id.renderButton($('#gBtn'), { theme: 'filled_black', size: 'large', shape: 'pill', text: 'continue_with' });
+        if (!myPhoto) google.accounts.id.prompt();
+      } catch (e) {}
+    };
+    document.head.appendChild(sc);
+  }
+
   // ================= ধাপ ১: ভাষা =================
   let pickedLang = null;
   function renderLangGrid(grid, q, selected, onPick) {
@@ -83,6 +131,7 @@
     $('#stepSetup').classList.remove('hidden');
     $('#name').value = myName;
     updateSetup();
+    setupGoogle();
     tryAutoPreview();
   };
 
@@ -93,7 +142,7 @@
     $('#pvMic').innerHTML = icon(prefMic ? 'mic' : 'micOff');
     $('#pvCam').classList.toggle('off', !prefCam);
     $('#pvCam').innerHTML = icon(prefCam ? 'cam' : 'camOff');
-    $('#pvAv').textContent = ($('#name').value.trim()[0] || '?').toUpperCase();
+    $('#pvAv').innerHTML = avInner($('#name').value.trim() || '?', myPhoto);
     const v = $('#pvVideo');
     const on = prefCam && camTrack;
     v.style.opacity = on ? 1 : 0;
@@ -108,6 +157,8 @@
     if (camTrack) camTrack.enabled = prefCam;
     updateSetup();
   };
+  $('#photoBtn').onclick = pickPhoto;
+  $('#pvAv').onclick = pickPhoto;
   $('#changeLang').onclick = () => { $('#stepSetup').classList.add('hidden'); $('#stepLang').classList.remove('hidden'); };
   async function tryAutoPreview() {
     try {
@@ -122,7 +173,14 @@
     myName = n; localStorage.setItem('setu_name', n); return true;
   }
   $('#goChat').onclick = () => { if (!readName()) return; unlockAudio(); connect('chat'); };
-  $('#goCall').onclick = async () => { if (!readName()) return; unlockAudio(); connect('call'); };
+  $('#goCall').onclick = async () => {
+    if (!readName()) return;
+    unlockAudio();
+    $('#goCall').disabled = true;
+    await getMedia(); // অনুমতি আগে নিয়ে নেয় — তারপর রুমে ঢোকে
+    $('#goCall').disabled = false;
+    connect('call');
+  };
 
   // ================= মিডিয়া =================
   async function getMedia() {
@@ -197,7 +255,7 @@
   let kickedOut = false;
   function doJoin() {
     if (kickedOut) return;
-    socket.emit('join', { room: roomId, name: myName, lang: myLang, gender: myGender, mode: 'chat', clientId, hostKey }, onJoined);
+    socket.emit('join', { room: roomId, name: myName, lang: myLang, gender: myGender, mode: 'chat', clientId, hostKey, photo: myPhoto }, onJoined);
   }
   async function onJoined(res) {
       if (!res) return;
@@ -257,7 +315,7 @@
   function renderKnocks() {
     const box = $('#knocks');
     if (!isHost() || sideMode === 'people') { box.innerHTML = ''; return; }
-    box.innerHTML = lobby.slice(0, 3).map((w) => `<div class="knock"><div class="av" style="width:38px;font-size:15px">${esc((w.name || '?')[0].toUpperCase())}</div>
+    box.innerHTML = lobby.slice(0, 3).map((w) => `<div class="knock"><div class="av" style="width:38px;font-size:15px">${avInner(w.name, w.photo)}</div>
       <div class="inf"><b>${esc(w.name)}</b><span>${esc(t('wantsJoin'))} · ${esc(langInfo(w.lang).name)}</span></div>
       <button class="mini" data-d="${w.id}">${esc(t('deny'))}</button><button class="mini ok" data-a="${w.id}">${esc(t('admit'))}</button></div>`).join('')
       + (lobby.length > 1 ? `<button class="mini ok" data-all="1" style="align-self:flex-start">${esc(t('admitAll'))} (${lobby.length})</button>` : '');
@@ -487,7 +545,7 @@
     if (!p) return;
     tl.el.classList.toggle('nocam', !p.cam && !p.screen);
     tl.el.classList.toggle(id === 'me' ? 'sharing' : 'screen', !!p.screen);
-    tl.el.querySelector('.av').textContent = (p.name || '?')[0].toUpperCase();
+    tl.el.querySelector('.av').innerHTML = avInner(p.name, id === 'me' ? myPhoto : p.photo);
     tl.el.querySelector('.t').textContent = id === 'me' ? myName + ' (' + t('you') + ')' : p.name;
     tl.el.querySelector('.lg').textContent = langInfo(p.lang).name;
     tl.el.querySelector('.badges').innerHTML = (p.hand ? `<i class="hnd">${icon('hand')}</i>` : '') + (!p.mic ? `<i>${icon('micOff')}</i>` : '');
@@ -677,7 +735,15 @@
     else if (recOn) startRec();
   }
 
-  function onSpeech(d) {
+  // হোস্টের দিক থেকে অনুবাদ না হয়ে এলে — নিজেই অনুবাদ করে নেয়
+  const sameLang = (a, b) => String(a || '').split('-')[0].toLowerCase() === String(b || '').split('-')[0].toLowerCase();
+  async function ensureTr(d) {
+    if (!d || d.same || sameLang(d.srcLang, myLang) || d.text !== d.original) return d;
+    try { const tx = await setuTranslate(d.original, d.srcLang, myLang); if (tx) d.text = tx; } catch (e) {}
+    return d;
+  }
+  async function onSpeech(d0) {
+    const d = d0.final ? await ensureTr(d0) : d0;
     if (inCall) {
       if (set.captions) showCap(d.from, d.name, d.text, d.same ? null : d.original, d.from + '|' + d.seg, d.final);
       if (d.final && !d.same && !set.original) speak(d);
@@ -743,7 +809,36 @@
       if (!queue.length || queue[0].from !== it.from) duck(it.from, false);
       nextSpeak();
     };
-    const guard = setTimeout(finish, 20000);
+    const guard = setTimeout(finish, 25000);
+    const L = langInfo(myLang);
+    const fallback = () => { if (!done) speakLocal(it, finish); };
+    // ১) Google-এর ফ্রি কণ্ঠ (সব ফোনে বাংলাসহ সব ভাষা)
+    const parts = splitText(it.text, 180);
+    let k = 0;
+    const playPart = () => {
+      if (done) return;
+      if (k >= parts.length) return finish();
+      const q = parts[k++];
+      ttsAudio.onended = playPart;
+      ttsAudio.onerror = () => (k === 1 ? fallback() : playPart());
+      ttsAudio.src = 'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=' + encodeURIComponent(L.code) + '&total=1&idx=0&textlen=' + q.length + '&q=' + encodeURIComponent(q);
+      try { ttsAudio.playbackRate = 1.1; } catch (e) {}
+      ttsAudio.play().catch(() => (k === 1 ? fallback() : playPart()));
+    };
+    playPart();
+  }
+  function splitText(text, max) {
+    const out = []; let cur = '';
+    for (const w of String(text).split(/(?<=[।.!?,;:،。！？\s])/)) {
+      if ((cur + w).length > max && cur) { out.push(cur.trim()); cur = ''; }
+      cur += w;
+      while (cur.length > max) { out.push(cur.slice(0, max)); cur = cur.slice(max); }
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out.length ? out : [String(text).slice(0, max)];
+  }
+  // ২) Google কণ্ঠ না চললে: ফোনের নিজের কণ্ঠ
+  function speakLocal(it, finish) {
     if (window.SetuNative && SetuNative.speak) {
       const id = 's' + (++ttsSeq);
       ttsWait[id] = finish;
@@ -769,7 +864,7 @@
     socket.emit('chat', { text, id });
     ta.value = ''; autoGrow();
   }
-  function onChat(m) { addMsg(m); }
+  async function onChat(m) { if (socket && m.from !== socket.id) await ensureTr(m); addMsg(m); }
   function addMsg(m) {
     if (shownMsg.has(m.id)) return;
     shownMsg.add(m.id);
@@ -867,14 +962,14 @@
         <button class="tg ${roomSet.lobby ? 'on' : ''}" data-h="lobby">${icon('lock')}<div><b>${esc(t('lobbyOpt'))}</b><small>${esc(t('lobbyDesc'))}</small></div><span class="chk"></span></button>
         <button class="tg ${roomSet.lockMic ? 'on' : ''}" data-h="lock-mic">${icon('micOff')}<div><b>${esc(t('lockMicOpt'))}</b><small>${esc(t('lockMicDesc'))}</small></div><span class="chk"></span></button>
         <div class="hb"><button class="btn ghost" data-h="mute-all">${icon('micOff')}${esc(t('muteAll'))}</button><button class="btn ghost" data-h="unban">${icon('block')}${esc(t('unbanAll'))}</button></div></div>`;
-      if (lobby.length) html += `<div class="wl"><h5>${esc(t('waitingList'))} (${lobby.length})</h5>` + lobby.map((w) => `<div class="wr"><div class="av" style="width:34px;font-size:14px">${esc((w.name || '?')[0].toUpperCase())}</div>
+      if (lobby.length) html += `<div class="wl"><h5>${esc(t('waitingList'))} (${lobby.length})</h5>` + lobby.map((w) => `<div class="wr"><div class="av" style="width:34px;font-size:14px">${avInner(w.name, w.photo)}</div>
         <div class="inf"><b>${esc(w.name)}</b><span>${esc(langInfo(w.lang).name)}</span></div>
         <button class="mini" data-h="deny" data-t="${w.id}">${esc(t('deny'))}</button><button class="mini ok" data-h="admit" data-t="${w.id}">${esc(t('admit'))}</button></div>`).join('')
         + (lobby.length > 1 ? `<button class="mini ok" data-h="admit-all">${esc(t('admitAll'))}</button>` : '') + '</div>';
     }
     const nCall = list.filter((p) => p.mode === 'call').length;
     html += `<div class="sumline">${nCall} ${esc(t('inCallN'))} · ${list.length - nCall} ${esc(t('inChatN'))}</div>`;
-    html += list.map((p) => `<div class="pr"><div class="av">${esc((p.name || '?')[0].toUpperCase())}</div>
+    html += list.map((p) => `<div class="pr"><div class="av">${avInner(p.name, p.isMe ? myPhoto : p.photo)}</div>
       <div class="inf"><b>${esc(p.name)}${p.isMe ? ' (' + esc(t('you')) + ')' : ''}${p.host ? '<span class="tag">' + esc(t('host')) + '</span>' : ''}</b>
       <span>${esc(langInfo(p.lang).name)} · ${esc(p.mode === 'call' ? t('inCall') : t('inChat'))}</span></div>
       <div class="st">${p.hand ? '<span class="yl">' + icon('hand') + '</span>' : ''}${p.mode === 'call' ? icon(p.mic ? 'mic' : 'micOff') : icon('chat')}</div>
@@ -949,7 +1044,7 @@
       items.push(['hand', 'hand', me && me.hand ? t('lowerHand') : t('hand'), toggleHand]);
       items.push(['rec', 'rec', recorder ? t('stopRecord') : t('record'), toggleRecord]);
       items.push(['cc', 'cc', t('captions'), () => { set.captions = !set.captions; if (!set.captions) $('#caps').innerHTML = ''; }, set.captions]);
-      items.push(['ear', 'ear', t('original'), () => { set.original = !set.original; if (set.original) { queue.length = 0; try { speechSynthesis.cancel(); } catch (e) {} } }, set.original]);
+      items.push(['ear', 'ear', t('original'), () => { set.original = !set.original; if (set.original) { queue.length = 0; try { ttsAudio.pause(); speechSynthesis.cancel(); } catch (e) {} } }, set.original]);
       items.push(['headset', 'headset', t('headphones'), () => { set.headphones = !set.headphones; }, set.headphones]);
       items.push(['people', 'people', t('people'), () => openSide('people')]);
       items.push(['back', 'chat', t('backToChat'), leaveCall]);

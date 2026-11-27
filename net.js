@@ -91,7 +91,7 @@
   Hub.prototype.all = function (ev, d, except) { for (const id of this.r.members.keys()) if (id !== except) this.send(id, ev, d); };
   Hub.prototype.settings = function () { return { lobby: this.r.lobby, lockMic: this.r.lockMic }; };
   Hub.prototype.hosts = function () { return [...this.r.members.values()].filter((p) => p.host); };
-  Hub.prototype.waitList = function () { return [...this.r.waiting.values()].map((w) => ({ id: w.p.id, name: w.p.name, lang: w.p.lang })); };
+  Hub.prototype.waitList = function () { return [...this.r.waiting.values()].map((w) => ({ id: w.p.id, name: w.p.name, lang: w.p.lang, photo: w.p.photo })); };
   Hub.prototype.sendLobby = function () { const l = this.waitList(); this.hosts().forEach((h) => this.send(h.id, 'lobby', l)); };
   Hub.prototype.others = function (except) { return [...this.r.members.values()].filter((p) => p.id !== except); };
   Hub.prototype.onBus = function (m) {
@@ -140,13 +140,15 @@
         const isHost = from === this.sock.id;
         const clientId = String(d.clientId || from).replace(/[^a-zA-Z0-9]/g, '').slice(0, 40);
         if (!isHost && r.banned.has(clientId)) return ack({ error: 'banned' });
-        const p = { id: from, clientId, name: cleanName(d.name), lang: validLang(d.lang), gender: d.gender === 'm' ? 'm' : 'f',
+        const ph = String(d.photo || '');
+        const photo = (/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(ph) && ph.length < 16000) || /^https:\/\/lh\d\.googleusercontent\.com\/[^\s"'<>]+$/.test(ph) ? ph : '';
+        const p = { id: from, clientId, photo, name: cleanName(d.name), lang: validLang(d.lang), gender: d.gender === 'm' ? 'm' : 'f',
           mode: 'chat', mic: false, cam: false, hand: false, screen: false, host: isHost, joinedAt: Date.now() };
         if (r.members.has(from)) r.members.delete(from);
         if (!isHost && r.lobby && !r.admitted.has(clientId)) {
           r.waiting.set(from, { p });
           ack({ waiting: true });
-          this.hosts().forEach((h) => this.send(h.id, 'knock', { id: from, name: p.name, lang: p.lang }));
+          this.hosts().forEach((h) => this.send(h.id, 'knock', { id: from, name: p.name, lang: p.lang, photo: p.photo }));
           this.sendLobby();
           return;
         }

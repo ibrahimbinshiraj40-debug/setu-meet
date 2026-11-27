@@ -21,3 +21,7 @@ function setuBase() {
   return location.href.replace(/[?#].*$/, '').replace(/[^/]*$/, '');
 }
 const setuMeetLink = (id) => setuBase() + 'm.html?r=' + id;
+
+// (ঐচ্ছিক) Google দিয়ে সাইন ইন করে Gmail-এর প্রোফাইল ছবি নেওয়ার জন্য OAuth Client ID
+// Google Cloud Console থেকে বানিয়ে এখানে বসান। খালি থাকলে শুধু "ছবি দিন" বাটন থাকবে।
+const SETU_GOOGLE_CLIENT_ID = '';

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <title>Setu Meet</title>
 <meta name="theme-color" content="#0f1115">
+<meta name="referrer" content="no-referrer">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -40,7 +41,11 @@
             <button class="cb" id="pvCam"></button>
           </div>
         </div>
-        <button class="linkbtn" id="changeLang"></button>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+          <button class="linkbtn" id="photoBtn"><span data-i18n="addPhoto"></span></button>
+          <button class="linkbtn" id="changeLang"></button>
+        </div>
+        <div id="gBtn" class="hidden" style="margin-top:12px"></div>
       </div>
       <div>
         <div class="label" data-i18n="yourName"></div>

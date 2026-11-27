@@ -32,7 +32,7 @@ const EN = {
   noScreen: 'Screen sharing is not supported on this device.',
   noSpeech: 'Live voice translation needs Google Chrome. Others will hear your original voice.',
   noMedia: 'Camera or microphone permission was denied.',
-  tapSound: 'Tap anywhere on the screen to turn on sound', leaveHint: 'To leave, press the red button', waitingHost: 'Waiting for the host to open the meeting…', connecting: 'Connecting…', participants: 'participants', voiceType: 'Voice typing',
+  addPhoto: 'Add profile photo', tapSound: 'Tap anywhere on the screen to turn on sound', leaveHint: 'To leave, press the red button', waitingHost: 'Waiting for the host to open the meeting…', connecting: 'Connecting…', participants: 'participants', voiceType: 'Voice typing',
   ended: 'You left the meeting', rejoin: 'Rejoin', home: 'Back to home', host: 'Host',
   recording: 'Recording', saved: 'Recording saved', emptyChat: 'Messages are translated automatically. Say hello!',
   spoke: 'said (voice)', shareText: 'Join my meeting',
@@ -82,7 +82,7 @@ const BN = {
   noScreen: 'এই ডিভাইসে স্ক্রিন শেয়ার হয় না।',
   noSpeech: 'লাইভ ভয়েস অনুবাদের জন্য Google Chrome লাগবে। অন্যরা আপনার আসল কণ্ঠ শুনবে।',
   noMedia: 'ক্যামেরা বা মাইকের অনুমতি দেওয়া হয়নি।',
-  tapSound: 'শব্দ চালু করতে স্ক্রিনের যেকোনো জায়গায় একবার চাপুন', leaveHint: 'বের হতে লাল বাটন চাপুন', waitingHost: 'হোস্ট মিটিং চালু করার অপেক্ষা করা হচ্ছে…', connecting: 'কানেক্ট হচ্ছে…', participants: 'জন', voiceType: 'বলে লিখুন',
+  addPhoto: 'প্রোফাইল ছবি দিন', tapSound: 'শব্দ চালু করতে স্ক্রিনের যেকোনো জায়গায় একবার চাপুন', leaveHint: 'বের হতে লাল বাটন চাপুন', waitingHost: 'হোস্ট মিটিং চালু করার অপেক্ষা করা হচ্ছে…', connecting: 'কানেক্ট হচ্ছে…', participants: 'জন', voiceType: 'বলে লিখুন',
   ended: 'আপনি মিটিং থেকে বের হয়েছেন', rejoin: 'আবার জয়েন', home: 'হোমে যান', host: 'হোস্ট',
   recording: 'রেকর্ড হচ্ছে', saved: 'রেকর্ড সেভ হয়েছে', emptyChat: 'মেসেজ অটোমেটিক অনুবাদ হবে। সালাম দিয়ে শুরু করুন!',
   spoke: 'বলেছে (ভয়েস)', shareText: 'আমার মিটিংয়ে জয়েন করুন',
@@ -117,19 +117,23 @@ function nativeTr(text, sl, tl) {
   });
 }
 async function webTr(text, sl, tl) {
-  const q = encodeURIComponent(text);
-  try {
-    const r = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=' + (sl || 'auto') + '&tl=' + tl + '&q=' + q);
-    const j = await r.json();
-    const out = (j[0] || []).map((x) => x[0]).join('');
-    if (out) return out;
-  } catch (e) {}
-  try {
-    const r = await fetch('https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=' + (sl || 'auto') + '&tl=' + tl + '&q=' + q);
-    let j = await r.json();
-    while (Array.isArray(j)) j = j[0];
-    if (typeof j === 'string' && j) return j;
-  } catch (e) {}
+  const q = encodeURIComponent(text), f = sl || 'auto';
+  const urls = [
+    'https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&ie=UTF-8&oe=UTF-8&sl=' + f + '&tl=' + tl + '&q=' + q,
+    'https://translate.googleapis.com/translate_a/single?client=dict-chrome-ex&dt=t&ie=UTF-8&oe=UTF-8&sl=' + f + '&tl=' + tl + '&q=' + q,
+    'https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=' + f + '&tl=' + tl + '&q=' + q
+  ];
+  for (const u of urls) {
+    try {
+      const r = await fetch(u, { referrerPolicy: 'no-referrer' });
+      if (!r.ok) continue;
+      const j = await r.json();
+      let out = null;
+      if (Array.isArray(j) && Array.isArray(j[0]) && Array.isArray(j[0][0])) out = j[0].map((x) => x[0]).join('');
+      else { let x = j; while (Array.isArray(x)) x = x[0]; if (typeof x === 'string') out = x; }
+      if (out) return out;
+    } catch (e) {}
+  }
   return null;
 }
 async function setuTranslate(text, sl, tl) {
