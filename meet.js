@@ -128,7 +128,7 @@
   async function getMedia() {
     if (localStream) return localStream;
     const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-    const video = { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' };
+    const video = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24, max: 30 }, facingMode: 'user' };
     try { localStream = await navigator.mediaDevices.getUserMedia({ audio, video }); }
     catch (e) {
       try { localStream = await navigator.mediaDevices.getUserMedia({ audio }); }
@@ -190,7 +190,7 @@
     socket.on('settings', onSettings);
     socket.on('lobby', (l) => { lobby = l || []; renderPeople(); renderKnocks(); });
     socket.on('knock', (k) => { if (isHost()) { beep(740); setTimeout(() => beep(990), 180); } });
-    socket.on('disconnect', () => { for (const id of [...peers.keys()]) closePeer(id); });
+    socket.on('disconnect', () => { for (const id of [...peers.keys()]) closePeer(id); if (me && !kickedOut) toast(t('connecting'), 3000); });
     renderRoom();
   }
 
@@ -212,6 +212,7 @@
       $('#waitScr').classList.add('hidden');
       $('#room').classList.remove('hidden');
       me = res.me;
+      if (window.SetuNative && SetuNative.meetingOn) try { SetuNative.meetingOn(); } catch (e) {}
       roomSet = res.settings || roomSet;
       if (roomSet.lockMic && !isHost()) prefMic = false;
       parts.clear();
@@ -273,6 +274,7 @@
     if (inCall) { for (const id of [...peers.keys()]) closePeer(id); stopScreen(true); if (localStream) localStream.getTracks().forEach((tr) => tr.stop()); localStream = micTrack = camTrack = null; inCall = false; }
     stopRec();
     kickedOut = true;
+    if (window.SetuNative && SetuNative.meetingOff) try { SetuNative.meetingOff(); } catch (e) {}
     if (socket) socket.disconnect();
     $('#room').classList.add('hidden');
     $('#waitScr').classList.add('hidden');
@@ -294,7 +296,7 @@
     if (me && p.id === me.id) { me = p; renderPeople(); renderKnocks(); renderBar(); updateTile('me'); return; }
     const old = parts.get(p.id);
     parts.set(p.id, p);
-    if (old && !old.hand && p.hand) { toast(p.name + ' ' + t('raised')); beep(880); }
+    if (old && !old.hand && p.hand) { toast(p.name + ' ' + t('raised')); chime(); }
     if (old && old.mode === 'call' && p.mode !== 'call') closePeer(p.id);
     updateTile(p.id);
     renderPeople(); renderCount();
@@ -348,7 +350,7 @@
   }
 
   function newPeer(id, offerer) {
-    const pc = new RTCPeerConnection({ iceServers: ICE });
+    const pc = new RTCPeerConnection({ iceServers: ICE, iceCandidatePoolSize: 4, bundlePolicy: 'max-bundle' });
     const peer = { pc, snd: {}, stream: new MediaStream(), pending: [], offerer, attached: false };
     peers.set(id, peer);
     ensureTile(id);
@@ -358,7 +360,7 @@
       peer.stream.getTracks().filter((x) => x.kind === e.track.kind).forEach((x) => peer.stream.removeTrack(x));
       peer.stream.addTrack(e.track);
       const v = tiles.get(id) && tiles.get(id).video;
-      if (v) { v.srcObject = peer.stream; v.play().catch(() => {}); }
+      if (v) { v.srcObject = peer.stream; v.play().catch(needTap); }
       if (e.track.kind === 'audio') watchLevel(id, peer.stream);
     };
     pc.onconnectionstatechange = () => {
@@ -445,6 +447,27 @@
     for (const p of peers.values()) if (p.snd[kind]) p.snd[kind].replaceTrack(track).catch(() => {});
   }
 
+  // ব্রাউজার শব্দ আটকে দিলে: একবার স্ক্রিনে চাপলেই সবার শব্দ চালু
+  let tapAsked = false;
+  function needTap() {
+    if (tapAsked) return; tapAsked = true;
+    toast(t('tapSound'), 6000);
+    const go = () => { tapAsked = false; tiles.forEach((tl) => tl.video.play().catch(() => {})); document.removeEventListener('click', go, true); };
+    document.addEventListener('click', go, true);
+  }
+
+  // অ্যাপের Back বাটন: আগে খোলা প্যানেল/মেনু বন্ধ
+  window.setuBack = function () {
+    if (!$('#morePop').classList.contains('hidden')) { $('#morePop').classList.add('hidden'); return true; }
+    if (!$('#reactPop').classList.contains('hidden')) { $('#reactPop').classList.add('hidden'); return true; }
+    if (!$('#langModal').classList.contains('hidden')) { $('#langModal').classList.add('hidden'); return true; }
+    if (inCall && sideMode) { closeSide(); return true; }
+    if (!inCall && sideMode === 'people') { openSide('chat'); return true; }
+    if (!$('#stepSetup').classList.contains('hidden')) { $('#stepSetup').classList.add('hidden'); $('#stepLang').classList.remove('hidden'); return true; }
+    if (me && !$('#room').classList.contains('hidden')) { toast(t('leaveHint')); return true; }
+    return false;
+  };
+
   // ---------- টাইল ----------
   function ensureTile(id) {
     if (tiles.has(id)) return tiles.get(id);
@@ -527,7 +550,7 @@
   async function toggleCam() {
     if (!camTrack) {
       try {
-        const s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } });
+        const s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24, max: 30 }, facingMode: 'user' } });
         camTrack = s.getVideoTracks()[0]; localStream.addTrack(camTrack);
         if (!screenTrack) { replaceAll('video', camTrack); tiles.get('me').video.srcObject = new MediaStream([camTrack]); }
       } catch (e) { return toast(t('noMedia')); }
@@ -563,6 +586,7 @@
   function toggleHand() {
     if (!me) return;
     me.hand = !me.hand;
+    if (me.hand) chime();
     sendUpdate({ hand: me.hand });
     renderBar(); updateTile('me');
   }
@@ -632,7 +656,7 @@
       interim = interim.trim();
       if (interim) {
         showCap('me', myName + ' (' + t('you') + ')', interim, null, 'me|' + seg, false);
-        if (Date.now() - lastInterim > 900) { lastInterim = Date.now(); socket.emit('speech', { text: interim, final: false, seg: String(seg) }); }
+        if (Date.now() - lastInterim > 700) { lastInterim = Date.now(); socket.emit('speech', { text: interim, final: false, seg: String(seg) }); }
       }
     };
     rec.onerror = (e) => {
@@ -641,7 +665,7 @@
     };
     rec.onend = () => {
       rec = null;
-      if (recOn && !recPaused && inCall) setTimeout(startRec, 250);
+      if (recOn && !recPaused && inCall) setTimeout(startRec, 80);
     };
     try { rec.start(); } catch (e) { rec = null; }
   }
@@ -728,7 +752,7 @@
     }
     if (!window.speechSynthesis) return finish();
     const u = new SpeechSynthesisUtterance(it.text);
-    u.lang = it.sr; u.rate = 1.05;
+    u.lang = it.sr; u.rate = 1.1;
     const v = pickVoice(it.sr, it.gender);
     if (v) u.voice = v;
     u.onend = finish; u.onerror = finish;
@@ -1008,6 +1032,25 @@
       o.frequency.value = f; g.gain.value = 0.04;
       o.connect(g); g.connect(beepCtx.destination);
       o.start(); g.gain.exponentialRampToValueAtTime(0.0001, beepCtx.currentTime + 0.25); o.stop(beepCtx.currentTime + 0.26);
+    } catch (e) {}
+  }
+  // হাত তোলার মিষ্টি ঘণ্টা-শব্দ (তিনটা সুর পরপর)
+  function chime() {
+    try {
+      beepCtx = beepCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = beepCtx, now = ctx.currentTime;
+      [659.25, 830.61, 987.77, 1318.5].forEach((f, i) => {
+        const o = ctx.createOscillator(), o2 = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine'; o2.type = 'triangle';
+        o.frequency.value = f; o2.frequency.value = f * 2;
+        const t0 = now + i * 0.09;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(0.09, t0 + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.9);
+        const g2 = ctx.createGain(); g2.gain.value = 0.18;
+        o.connect(g); o2.connect(g2); g2.connect(g); g.connect(ctx.destination);
+        o.start(t0); o2.start(t0); o.stop(t0 + 1); o2.stop(t0 + 1);
+      });
     } catch (e) {}
   }
   let wake = null;

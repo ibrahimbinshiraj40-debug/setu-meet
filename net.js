@@ -1,10 +1,69 @@
 // Setu Meet — net.js
-// সার্ভার ছাড়া মিটিং: হোস্টের ফোনই "সার্ভার" (hub)। সবাই PeerJS-এর ফ্রি পাবলিক সংযোগ দিয়ে হোস্টের সাথে জোড়া লাগে।
-// meet.js আগের মতোই socket.emit / socket.on ব্যবহার করে — এখানে সেটাই নকল করা হয়েছে।
+// সার্ভার ছাড়া মিটিং: হোস্টের ফোনই "সার্ভার" (hub)।
+// মেসেজ যায় ফ্রি পাবলিক MQTT সংযোগ দিয়ে (দুটো একসাথে), মিটিং-কোড দিয়ে তালা মারা (AES-GCM)।
+// meet.js আগের মতোই socket.emit / socket.on ব্যবহার করে — এখানে সেটাই বানানো হয়েছে।
 (function () {
   'use strict';
-  const hubIdOf = (room) => 'setumeet-' + room;
-  const peerOpts = () => ({ debug: 0, ...(window.SETU_PEER_OVERRIDE || {}), config: { iceServers: (typeof SETU_ICE !== 'undefined' ? SETU_ICE : [{ urls: 'stun:stun.l.google.com:19302' }]) } });
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const rid = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (x) => x.toString(16).padStart(2, '0')).join('');
+  const b64 = (buf) => { let s = ''; const u = new Uint8Array(buf); for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s); };
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  async function sha(s) { return new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(s))); }
+  const hex = (u) => Array.from(u, (x) => x.toString(16).padStart(2, '0')).join('');
+
+  // ---------------- Bus: দুই ব্রোকারে একসাথে, তালা মারা মেসেজ ----------------
+  function Bus(room, myId, will) {
+    this.room = room; this.myId = myId; this.will = will;
+    this.subs = new Set(); this.h = null; this.seen = new Map(); this.clients = []; this.readyCbs = []; this.ready = false;
+  }
+  Bus.prototype.start = async function () {
+    this.base = 'setumeet/v2/' + hex(await sha('setu-topic:' + this.room)).slice(0, 32);
+    this.key = await crypto.subtle.importKey('raw', await sha('setu-key:' + this.room), 'AES-GCM', false, ['encrypt', 'decrypt']);
+    const willMsg = this.will ? { topic: this.base + '/' + this.will.to, payload: await this._pack(this.will.msg), qos: 0, retain: false } : undefined;
+    const brokers = (typeof SETU_BROKERS !== 'undefined' ? SETU_BROKERS : []);
+    brokers.forEach((url) => {
+      let c;
+      try {
+        c = mqtt.connect(url, { clientId: 'sm' + rid(8), keepalive: 20, reconnectPeriod: 2500, connectTimeout: 8000, clean: true, will: willMsg });
+      } catch (e) { return; }
+      this.clients.push(c);
+      c.on('connect', () => {
+        this.subs.forEach((t) => c.subscribe(this.base + '/' + t, { qos: 0 }));
+        if (!this.ready) { this.ready = true; this.readyCbs.forEach((f) => f()); }
+      });
+      c.on('message', (topic, payload) => this._recv(topic, payload));
+      c.on('error', () => {});
+    });
+  };
+  Bus.prototype.onReady = function (f) { if (this.ready) f(); else this.readyCbs.push(f); };
+  Bus.prototype.sub = function (t) {
+    this.subs.add(t);
+    this.clients.forEach((c) => { if (c.connected) c.subscribe(this.base + '/' + t, { qos: 0 }); });
+  };
+  Bus.prototype._pack = async function (obj) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.key, enc.encode(JSON.stringify(obj)));
+    return b64(iv) + '.' + b64(ct);
+  };
+  Bus.prototype.pub = async function (t, obj) {
+    obj.mid = obj.mid || rid(6);
+    const payload = await this._pack(obj);
+    this.clients.forEach((c) => { if (c.connected) c.publish(this.base + '/' + t, payload, { qos: 0 }); });
+  };
+  Bus.prototype._recv = async function (topic, payload) {
+    try {
+      const [iv, ct] = String(payload).split('.');
+      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(iv) }, this.key, unb64(ct));
+      const m = JSON.parse(dec.decode(pt));
+      if (m.mid) {
+        if (this.seen.has(m.mid)) return; // দুই ব্রোকার থেকে একই মেসেজ — একবারই
+        this.seen.set(m.mid, 1);
+        if (this.seen.size > 3000) this.seen.delete(this.seen.keys().next().value);
+      }
+      if (this.h) this.h(topic.slice(this.base.length + 1), m);
+    } catch (e) { /* অন্য মিটিংয়ের বা নষ্ট মেসেজ */ }
+  };
+  Bus.prototype.end = function () { this.clients.forEach((c) => { try { c.end(true); } catch (e) {} }); };
 
   // ---------------- socket-এর মতো ছোট ক্লাস ----------------
   function Sock() { this.id = null; this._h = {}; this.connected = false; }
@@ -12,15 +71,22 @@
   Sock.prototype._fire = function (ev, d) { (this._h[ev] || []).forEach((f) => { try { f(d); } catch (e) { console.log(e); } }); };
 
   // ================= হোস্টের "সার্ভার" =================
-  function Hub(sock) {
-    this.sock = sock;
-    this.conns = new Map();
+  function Hub(sock, bus) {
+    this.sock = sock; this.bus = bus;
+    this.seenAt = new Map();
     this.r = { members: new Map(), waiting: new Map(), lobby: false, lockMic: false, banned: new Set(), admitted: new Set() };
+    // ২০ সেকেন্ড সাড়া না দিলে ধরে নেওয়া হয় চলে গেছে
+    this.sweep = setInterval(() => {
+      const now = Date.now();
+      for (const id of [...this.r.members.keys(), ...this.r.waiting.keys()]) {
+        if (id === this.sock.id) continue;
+        if (now - (this.seenAt.get(id) || 0) > 20000) this.leave(id);
+      }
+    }, 5000);
   }
   Hub.prototype.send = function (id, ev, d) {
     if (id === this.sock.id) { const s = this.sock; setTimeout(() => s._fire(ev, d), 0); return; }
-    const c = this.conns.get(id);
-    if (c && c.open) { try { c.send({ t: 'e', ev, d }); } catch (e) {} }
+    this.bus.pub('c/' + id, { t: 'e', ev, d });
   };
   Hub.prototype.all = function (ev, d, except) { for (const id of this.r.members.keys()) if (id !== except) this.send(id, ev, d); };
   Hub.prototype.settings = function () { return { lobby: this.r.lobby, lockMic: this.r.lockMic }; };
@@ -28,20 +94,16 @@
   Hub.prototype.waitList = function () { return [...this.r.waiting.values()].map((w) => ({ id: w.p.id, name: w.p.name, lang: w.p.lang })); };
   Hub.prototype.sendLobby = function () { const l = this.waitList(); this.hosts().forEach((h) => this.send(h.id, 'lobby', l)); };
   Hub.prototype.others = function (except) { return [...this.r.members.values()].filter((p) => p.id !== except); };
-
-  Hub.prototype.addConn = function (conn) {
-    const id = conn.peer;
-    conn.on('open', () => this.conns.set(id, conn));
-    conn.on('data', (m) => {
-      if (!m || m.t !== 'e') return;
-      const ack = m.a ? (res) => { try { conn.send({ t: 'a', a: m.a, d: res }); } catch (e) {} } : null;
-      this.handle(id, m.ev, m.d, ack);
-    });
-    const gone = () => { if (this.conns.get(id) === conn) { this.conns.delete(id); this.leave(id); } };
-    conn.on('close', gone);
-    conn.on('error', gone);
+  Hub.prototype.onBus = function (m) {
+    if (!m || !m.from || m.from === this.sock.id) return;
+    this.seenAt.set(m.from, Date.now());
+    if (m.t === 'ping') { this.bus.pub('c/' + m.from, { t: 'pong' }); return; }
+    if (m.t === 'bye') { this.leave(m.from); return; }
+    if (m.t === 'e') {
+      const ack = m.a ? (res) => this.bus.pub('c/' + m.from, { t: 'a', a: m.a, d: res }) : null;
+      this.handle(m.from, m.ev, m.d, ack);
+    }
   };
-
   Hub.prototype.admit = function (p, ack) {
     const r = this.r;
     r.waiting.delete(p.id);
@@ -52,11 +114,11 @@
     if (ack) ack(res); else this.send(p.id, 'admitted', res);
     if (p.host) this.send(p.id, 'lobby', this.waitList());
   };
-
   Hub.prototype.leave = function (id) {
     const r = this.r;
     if (r.waiting.delete(id)) this.sendLobby();
     if (r.members.delete(id)) this.all('p-leave', id);
+    this.seenAt.delete(id);
   };
 
   const cleanName = (s) => String(s || '').replace(/[<>]/g, '').trim().slice(0, 40) || 'Guest';
@@ -141,8 +203,7 @@
               if (d.action === 'ban') r.banned.add(target.clientId);
               r.admitted.delete(target.clientId);
               this.send(target.id, 'kicked', { ban: d.action === 'ban', by: me.name });
-              const c = this.conns.get(target.id);
-              setTimeout(() => { try { c && c.close(); } catch (e) {} this.leave(target.id); }, 400);
+              setTimeout(() => this.leave(target.id), 400);
             }
             break;
           case 'unban': r.banned.clear(); break;
@@ -169,99 +230,79 @@
   // ================= হোস্ট সংযোগ =================
   function HostSock(room) {
     Sock.call(this);
-    this.room = room;
-    this.closed = false;
-    this.hub = null;
-    this._start();
-  }
-  HostSock.prototype = Object.create(Sock.prototype);
-  HostSock.prototype._start = function () {
-    if (this.closed) return;
-    const peer = this.peer = new Peer(hubIdOf(this.room), peerOpts());
-    peer.on('open', (id) => {
-      this.id = id;
-      if (!this.hub) this.hub = new Hub(this);
+    this.id = 'h' + rid(6);
+    this.bus = new Bus(room, this.id, { to: 'a', msg: { t: 'hostgone' } });
+    this.hub = new Hub(this, this.bus);
+    this.bus.h = (topic, m) => { if (topic === 'h') this.hub.onBus(m); };
+    this.bus.sub('h');
+    this.bus.start().then(() => this.bus.onReady(() => {
+      this.bus.pub('a', { t: 'hoststart' });
       this.connected = true;
       this._fire('connect');
-    });
-    peer.on('connection', (conn) => this.hub && this.hub.addConn(conn));
-    peer.on('disconnected', () => { if (!this.closed) setTimeout(() => { try { peer.reconnect(); } catch (e) {} }, 1500); });
-    peer.on('error', (e) => {
-      if (this.closed) return;
-      if (e.type === 'unavailable-id') { // আগের সংযোগ এখনো ছাড়েনি — একটু পরে আবার
-        this._fire('busy');
-        try { peer.destroy(); } catch (x) {}
-        setTimeout(() => this._start(), 3000);
-      } else if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(e.type)) {
-        setTimeout(() => { try { peer.reconnect(); } catch (x) {} }, 2000);
-      }
-    });
-  };
+    }));
+  }
+  HostSock.prototype = Object.create(Sock.prototype);
   HostSock.prototype.emit = function (ev, d, ack) {
-    if (!this.hub) return;
     this.hub.handle(this.id, ev, d, ack ? (res) => setTimeout(() => ack(res), 0) : null);
   };
   HostSock.prototype.disconnect = function () {
-    this.closed = true;
-    try { this.peer.destroy(); } catch (e) {}
+    clearInterval(this.hub.sweep);
+    this.bus.pub('a', { t: 'hostgone' }).finally(() => setTimeout(() => this.bus.end(), 300));
   };
 
   // ================= গেস্ট সংযোগ =================
   function GuestSock(room) {
     Sock.call(this);
-    this.room = room;
-    this.closed = false;
-    this.acks = {};
-    this.seq = 0;
-    this.conn = null;
-    const peer = this.peer = new Peer(peerOpts());
-    peer.on('open', (id) => { this.id = id; this._dial(); });
-    peer.on('disconnected', () => { if (!this.closed) setTimeout(() => { try { peer.reconnect(); } catch (e) {} }, 1500); });
-    peer.on('error', (e) => {
-      if (this.closed) return;
-      if (e.type === 'peer-unavailable') { this._fire('nohost'); this._retry(4000); }
-      else if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(e.type)) setTimeout(() => { try { peer.reconnect(); } catch (x) {} }, 2000);
-    });
+    this.id = 'g' + rid(6);
+    this.closed = false; this.acks = {}; this.seq = 0; this.lastPong = 0; this.noHostShown = false;
+    this.bus = new Bus(room, this.id, { to: 'h', msg: { t: 'bye', from: this.id } });
+    this.bus.h = (topic, m) => this._onBus(topic, m);
+    this.bus.sub('c/' + this.id);
+    this.bus.sub('a');
+    this.bus.start().then(() => this.bus.onReady(() => this._probe()));
+    // প্রতি ৪ সেকেন্ডে হোস্টকে "আছি" বলা
+    this.timer = setInterval(() => this._tick(), 4000);
   }
   GuestSock.prototype = Object.create(Sock.prototype);
-  GuestSock.prototype._retry = function (ms) {
-    clearTimeout(this._rt);
-    this._rt = setTimeout(() => { if (!this.closed && !this.connected) this._dial(); }, ms);
+  GuestSock.prototype._probe = function () {
+    if (this.closed) return;
+    this.bus.pub('h', { t: 'ping', from: this.id });
+    clearTimeout(this.pt);
+    this.pt = setTimeout(() => { if (!this.connected && !this.closed) { this._fire('nohost'); } }, 6000);
   };
-  GuestSock.prototype._dial = function () {
-    if (this.closed || !this.peer || this.peer.destroyed) return;
-    if (this.peer.disconnected) { try { this.peer.reconnect(); } catch (e) {} return this._retry(3000); }
-    const conn = this.conn = this.peer.connect(hubIdOf(this.room), { serialization: 'json', reliable: true });
-    const t = setTimeout(() => { if (!conn.open) { try { conn.close(); } catch (e) {} this._fire('nohost'); this._retry(3000); } }, 15000);
-    conn.on('open', () => { clearTimeout(t); this.connected = true; this._fire('connect'); });
-    conn.on('data', (m) => {
-      if (!m) return;
-      if (m.t === 'a') { const f = this.acks[m.a]; delete this.acks[m.a]; if (f) f(m.d); }
-      else if (m.t === 'e') this._fire(m.ev, m.d);
-    });
-    conn.on('close', () => {
-      clearTimeout(t);
-      if (this.conn !== conn) return;
-      if (this.connected) { this.connected = false; this._fire('disconnect'); }
-      if (!this.closed) { this._fire('nohost'); this._retry(3000); }
-    });
+  GuestSock.prototype._tick = function () {
+    if (this.closed || !this.bus.ready) return;
+    this.bus.pub('h', { t: 'ping', from: this.id });
+    if (this.connected && Date.now() - this.lastPong > 16000) this._lost();
+  };
+  GuestSock.prototype._lost = function () {
+    if (!this.connected) return;
+    this.connected = false;
+    this._fire('disconnect');
+    this._fire('nohost');
+  };
+  GuestSock.prototype._onBus = function (topic, m) {
+    if (topic === 'a') {
+      if (m.t === 'hostgone') this._lost();
+      if (m.t === 'hoststart') this._probe();
+      return;
+    }
+    if (m.t === 'pong') {
+      this.lastPong = Date.now();
+      if (!this.connected) { this.connected = true; clearTimeout(this.pt); this._fire('connect'); }
+    } else if (m.t === 'a') { const f = this.acks[m.a]; delete this.acks[m.a]; if (f) f(m.d); }
+    else if (m.t === 'e') { this.lastPong = Date.now(); this._fire(m.ev, m.d); }
   };
   GuestSock.prototype.emit = function (ev, d, ack) {
-    const c = this.conn;
-    if (!c || !c.open) return;
-    const m = { t: 'e', ev, d };
+    const m = { t: 'e', from: this.id, ev, d };
     if (ack) { m.a = 'a' + (++this.seq); this.acks[m.a] = ack; }
-    try { c.send(m); } catch (e) {}
+    this.bus.pub('h', m);
   };
   GuestSock.prototype.disconnect = function () {
     this.closed = true;
-    clearTimeout(this._rt);
-    try { this.conn && this.conn.close(); } catch (e) {}
-    try { this.peer.destroy(); } catch (e) {}
+    clearInterval(this.timer);
+    this.bus.pub('h', { t: 'bye', from: this.id }).finally(() => setTimeout(() => this.bus.end(), 300));
   };
 
-  window.SetuNet = {
-    connect: (room, asHost) => (asHost ? new HostSock(room) : new GuestSock(room)),
-    Hub
-  };
+  window.SetuNet = { connect: (room, asHost) => (asHost ? new HostSock(room) : new GuestSock(room)) };
 })();

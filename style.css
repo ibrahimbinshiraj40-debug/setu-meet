@@ -10,6 +10,13 @@
   --r:16px;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html{touch-action:manipulation}
+button{transition:transform .08s,background .15s,opacity .15s}
+button:active{transform:scale(.93)}
+.side{animation:slidein .18s ease-out}
+@keyframes slidein{from{transform:translateX(24px);opacity:0}}
+.modal{animation:pop .18s ease-out}
+@keyframes pop{from{transform:scale(.94);opacity:0}}
 html,body{height:100%}
 body{background:var(--bg);color:var(--tx);font-family:"SetuBangla","Poppins","Segoe UI",Roboto,"Noto Sans",system-ui,sans-serif;font-size:15px;line-height:1.5;overflow-x:hidden}
 button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
@@ -93,7 +100,7 @@ input{font:inherit;color:var(--tx)}
 .linkbtn{color:var(--acc2);font-weight:600;display:inline-flex;align-items:center;gap:6px;margin-top:14px;font-size:14px}
 
 /* ---------- Room ---------- */
-.room{position:fixed;inset:0;display:flex;flex-direction:column;background:#0b0d11}
+.room{position:fixed;inset:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);display:flex;flex-direction:column;background:#0b0d11}
 .room-main{flex:1;display:flex;min-height:0;position:relative}
 .stage{flex:1;position:relative;min-width:0;display:flex;flex-direction:column}
 .grid{flex:1;display:grid;gap:10px;padding:12px;grid-template-columns:repeat(var(--cols,1),1fr);grid-auto-rows:1fr;min-height:0}
@@ -142,8 +149,8 @@ input{font:inherit;color:var(--tx)}
 .recdot::before{content:"";width:8px;height:8px;border-radius:50%;background:#fff;animation:blink 1s infinite}
 @keyframes blink{50%{opacity:.2}}
 
-.pop{position:absolute;bottom:76px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:8px;z-index:20;box-shadow:0 12px 40px #000a;animation:fade .15s}
-.pop.reacts{display:flex;gap:4px;left:50%;transform:translateX(-50%)}
+.pop{position:absolute;bottom:76px;animation:pop .15s ease-out!important;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:8px;z-index:40;box-shadow:0 12px 40px #000a;animation:fade .15s}
+.pop.reacts{animation:none!important;display:flex;gap:4px;left:50%;transform:translateX(-50%)}
 .pop.reacts button{font-size:28px;width:50px;height:50px;border-radius:12px}
 .pop.reacts button:hover{background:var(--card2);transform:scale(1.15)}
 .pop.menu{right:12px;min-width:270px}
@@ -255,8 +262,78 @@ input{font:inherit;color:var(--tx)}
   .hide-m{display:none!important}
   .panel{padding:18px}
   .chathead>img{display:none}
+  .chathead .grow b{font-size:15px}
+  .chathead .cb.flat{width:40px;height:40px}
+  .chathead #chCall{padding:9px 12px}
+  .side-h{padding:12px 12px 8px 16px}
+  .side-h .cb.flat{width:44px;height:44px;background:var(--card2)}
+  .pop.menu{left:10px;right:10px;min-width:0;max-height:70vh;overflow:auto}
+  .alone{top:10px}
+  .knock{width:100%}
+  #knocks{left:10px;right:10px;bottom:84px}
   .room.chatmode .chathead{padding:10px 10px;gap:6px}
   .grid{padding:8px;gap:8px}
   .cap{font-size:15px}
 }
 @media (min-width:861px){ .show-m{display:none!important} }
+/* অ্যাপ ছোট ভাসমান উইন্ডোতে (PiP) থাকলে শুধু ভিডিও */
+body.pip .bar,body.pip .chathead,body.pip .side,body.pip .captions,body.pip .alone,body.pip #knocks,body.pip .pop,body.pip #toasts{display:none!important}
+body.pip .grid{padding:2px;gap:2px}
+body.pip .tile .nm,body.pip .tile .badges{display:none}
+
+/* ================= নতুন সুন্দর ডিজাইন (v2.2) ================= */
+:root{--glass:rgba(30,34,43,.72);--glass2:rgba(255,255,255,.06);--ring:linear-gradient(135deg,#60a5fa,#22d3ee,#a78bfa)}
+body{background:radial-gradient(1200px 600px at 10% -10%,#1d3b6e55,transparent 60%),radial-gradient(900px 500px at 110% 110%,#0e749055,transparent 60%),var(--bg)}
+.btn.pri{background:linear-gradient(135deg,#3b82f6,#06b6d4 60%,#22d3ee);box-shadow:0 8px 26px #0ea5e955,inset 0 1px 0 #ffffff33}
+.btn.ghost{background:var(--glass2);border:1px solid #ffffff14;backdrop-filter:blur(8px)}
+.panel{background:linear-gradient(180deg,#232836ee,#1a1e27ee);border:1px solid #ffffff12;box-shadow:0 24px 60px #0008;backdrop-filter:blur(14px);position:relative}
+.panel::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;background:linear-gradient(135deg,#3b82f688,transparent 40%,transparent 60%,#06b6d488);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none}
+.lang-card{background:#ffffff08;border:1px solid #ffffff12;transition:transform .12s,border-color .12s,background .12s}
+.lang-card:hover{transform:translateY(-2px);background:#ffffff0e}
+.lang-card.sel{background:linear-gradient(135deg,#3b82f633,#06b6d422);border-color:#38bdf8;box-shadow:0 0 0 3px #38bdf833,0 8px 20px #0ea5e933}
+.mode{background:#ffffff08;border:1px solid #ffffff14;transition:transform .12s,border-color .12s,box-shadow .12s}
+.mode:hover,.mode:active{border-color:#38bdf8;box-shadow:0 10px 28px #0ea5e933;transform:translateY(-2px)}
+.mode .mi{box-shadow:0 8px 20px #0ea5e955}
+.field{background:#0c0f15aa;border:1px solid #ffffff18}
+.field:focus{border-color:#38bdf8;box-shadow:0 0 0 3px #38bdf833}
+
+/* রুম */
+.room{background:radial-gradient(900px 500px at 50% -20%,#16325a55,transparent 70%),#0a0c10}
+.tile{background:linear-gradient(160deg,#1f2531,#141821);border:1px solid #ffffff10;box-shadow:0 10px 30px #0007;border-radius:20px}
+.tile.speaking{box-shadow:0 0 0 3px #22d3ee,0 0 28px #22d3ee66}
+.av{background:var(--ring);box-shadow:0 0 0 6px #ffffff0d,0 12px 30px #0ea5e955}
+.tile .nm{background:#0b0e14b3;backdrop-filter:blur(8px);border:1px solid #ffffff14}
+.tile .badges .hnd{background:linear-gradient(135deg,#fde047,#f59e0b);box-shadow:0 0 18px #f59e0b88;animation:wave 1.2s ease-in-out infinite}
+@keyframes wave{0%,100%{transform:rotate(0)}25%{transform:rotate(-14deg)}75%{transform:rotate(14deg)}}
+.bar{background:transparent}
+.bar .mid{background:var(--glass);border:1px solid #ffffff12;padding:8px 10px;border-radius:999px;backdrop-filter:blur(16px);box-shadow:0 12px 34px #000a}
+.cb{background:#ffffff12;border:1px solid #ffffff0d}
+.cb:hover{background:#ffffff1f}
+.cb.off{background:linear-gradient(135deg,#f43f5e,#dc2626);border-color:transparent;box-shadow:0 6px 16px #dc262666}
+.cb.on{background:linear-gradient(135deg,#93c5fd,#67e8f9);color:#06213f}
+.cb.end{background:linear-gradient(135deg,#f43f5e,#dc2626);box-shadow:0 6px 18px #dc262677}
+.cb.flat{background:none;border:0}
+.cb.flat.on{background:#38bdf826;color:#7dd3fc}
+.cb .cnt{background:linear-gradient(135deg,#3b82f6,#06b6d4);box-shadow:0 2px 8px #0008}
+.side{background:linear-gradient(180deg,#1e2330f2,#171b24f2);backdrop-filter:blur(16px);border:1px solid #ffffff12;box-shadow:-10px 0 40px #0006}
+.side-h{border-bottom:1px solid #ffffff0d}
+.msg .bub{background:#ffffff0f;border:1px solid #ffffff0d;box-shadow:0 4px 12px #0003}
+.msg.mine .bub{background:linear-gradient(135deg,#2563eb,#0891b2);border:0;box-shadow:0 6px 18px #0891b244}
+.sys{background:#ffffff0a;border:1px solid #ffffff0d}
+.compose{border-top:1px solid #ffffff0d;background:#0f121880}
+.compose textarea{background:#0b0e14;border:1px solid #ffffff14}
+.pop{background:linear-gradient(180deg,#232836f5,#1b1f28f5);backdrop-filter:blur(16px);border:1px solid #ffffff14;box-shadow:0 20px 50px #000c}
+.pop.menu button .ic{color:#7dd3fc}
+.cap{background:#0b0e14d9;backdrop-filter:blur(8px);border:1px solid #ffffff12;border-left:3px solid #22d3ee}
+.alone{background:var(--glass);backdrop-filter:blur(12px);border:1px solid #ffffff14;box-shadow:0 10px 30px #0008}
+.room.chatmode .chathead{background:linear-gradient(180deg,#1e2330,#191d26);border-bottom:1px solid #ffffff10;box-shadow:0 6px 20px #0005}
+.hostbox{background:linear-gradient(135deg,#0ea5e912,#6366f10f);border:1px solid #38bdf833}
+.knock{background:linear-gradient(135deg,#2a2412f2,#1e2330f2);backdrop-filter:blur(12px)}
+.toast{background:#1e2330f0;color:#eef1f6;border:1px solid #ffffff1a;backdrop-filter:blur(12px);box-shadow:0 10px 30px #000a}
+.fly{filter:drop-shadow(0 6px 14px #0008)}
+.modal{background:linear-gradient(180deg,#232836,#1b1f28);border:1px solid #ffffff14;box-shadow:0 30px 70px #000c}
+.feat .dot{background:linear-gradient(135deg,#3b82f622,#06b6d422);border:1px solid #38bdf833}
+.code-box{background:#0b0e14aa;border:1px solid #ffffff18}
+.art .bub{background:var(--glass);backdrop-filter:blur(10px);border:1px solid #ffffff14}
+.spin{border-top-color:#22d3ee;box-shadow:0 0 30px #22d3ee33}
+@media (max-width:860px){.bar .mid{padding:6px 8px;gap:6px}.bar{padding:6px 8px 10px}}
